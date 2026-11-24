@@ -1,0 +1,7 @@
+anthropic>=2.13,<3
+httpx2>=2.16,<3
+pydantic>=2.7,<3
+pytest>=8,<9
+python-dotenv>=1,<2
+streamlit>=1.40,<2
+trafilatura>=2,<3
