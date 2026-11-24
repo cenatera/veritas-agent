@@ -174,3 +174,8 @@ rechazan un texto, lo que puede cambiar el coste.
 - Lectura de PDF y Word; hoy solo se admite texto pegado.
 - Selección de pasajes para reducir el coste.
 - Respeto de `robots.txt` y ritmo de descarga antes de un uso intensivo.
+
+## Licencia
+
+Código bajo [licencia MIT](LICENSE). Los extractos citados en el ejemplo y en la
+evaluación pertenecen a sus fuentes y conservan sus propias condiciones.
