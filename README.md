@@ -40,6 +40,7 @@ flowchart LR
 | [`src/report.py`](src/report.py) | Informe Markdown, sin modelo de lenguaje |
 | [`src/costs.py`](src/costs.py) | Estimación de coste |
 | [`app.py`](app.py) | Interfaz Streamlit |
+| [`evals/`](evals/) | Casos, métricas y ejecutor de la evaluación |
 
 ## Garantías y límites
 
@@ -125,6 +126,36 @@ los componentes. La prueba real es aparte y **consume saldo**; guarda sus result
 .venv/bin/python -m scripts.live_check
 ```
 
+## Evaluación
+
+**Preparada, todavía no ejecutada: no hay cifras de precisión.** Son 26 casos en
+[`evals/cases.json`](evals/cases.json): 8 ciertos, 7 falsos, 3 engañosos, 3
+desactualizados y 5 no comprobables. Los 21 concluyentes llevan una referencia ajena a
+Wikipedia, que el pipeline no recibe; el 24 de noviembre de 2026 todos los extractos
+estaban en su página.
+
+Comprobar las referencias (usa la red, sin coste de API):
+
+```bash
+.venv/bin/python -m evals.check_references
+```
+
+Ver la estimación de coste, sin llamar a la API:
+
+```bash
+.venv/bin/python -m evals.run
+```
+
+Ejecutarla, con un tope de gasto:
+
+```bash
+.venv/bin/python -m evals.run --run --max-usd 8
+```
+
+Se distinguen los errores (afirmar algo concluyente e incorrecto) de las abstenciones.
+La muestra es pequeña y sobre todo enciclopédica, no incluye casos `En disputa` ni
+artículos largos, y los nombres de los casos no comprobables son inventados.
+
 ## Privacidad y coste
 
 El texto auditado se envía a Anthropic, y las palabras clave a Wikipedia y GDELT. Las
@@ -137,8 +168,8 @@ rechazan un texto, lo que puede cambiar el coste.
 
 ## Pendiente
 
-- Evaluación con 20–30 afirmaciones periodísticas, incluidas engañosas, desactualizadas
-  y fuera de contexto.
+- Ejecutar la evaluación y ampliarla con noticias de actualidad, citas fuera de contexto
+  y casos en disputa.
 - Una fuente de noticias más estable: GDELT es intermitente y Wikipedia, secundaria.
 - Lectura de PDF y Word; hoy solo se admite texto pegado.
 - Selección de pasajes para reducir el coste.

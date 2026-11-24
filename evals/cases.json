@@ -1,0 +1,247 @@
+[
+  {
+    "id": "e01",
+    "category": "cierta",
+    "expected": "Confirmada",
+    "text": "Albert Einstein recibió el Premio Nobel de Física por su descubrimiento de la ley del efecto fotoeléctrico.",
+    "reference": {
+      "url": "https://www.nobelprize.org/prizes/physics/1921/einstein/facts/",
+      "excerpt": "especially for his discovery of the law of the photoelectric effect"
+    }
+  },
+  {
+    "id": "e02",
+    "category": "cierta",
+    "expected": "Confirmada",
+    "text": "Gabriel García Márquez ganó el Premio Nobel de Literatura en 1982.",
+    "reference": {
+      "url": "https://www.nobelprize.org/prizes/literature/1982/marquez/facts/",
+      "excerpt": "Nobel Prize in Literature 1982"
+    }
+  },
+  {
+    "id": "e03",
+    "category": "cierta",
+    "expected": "Confirmada",
+    "text": "La Asamblea General de la ONU proclamó la Declaración Universal de Derechos Humanos en París el 10 de diciembre de 1948.",
+    "reference": {
+      "url": "https://www.un.org/en/about-us/universal-declaration-of-human-rights",
+      "excerpt": "proclaimed by the United Nations General Assembly in Paris on 10 December 1948"
+    }
+  },
+  {
+    "id": "e04",
+    "category": "cierta",
+    "expected": "Confirmada",
+    "text": "La Organización de las Naciones Unidas comenzó a existir oficialmente el 24 de octubre de 1945.",
+    "reference": {
+      "url": "https://www.un.org/en/about-us/history-of-the-un",
+      "excerpt": "the United Nations officially began, on 24 October 1945"
+    }
+  },
+  {
+    "id": "e05",
+    "category": "cierta",
+    "expected": "Confirmada",
+    "text": "El Pacífico es el océano más grande del mundo.",
+    "reference": {
+      "url": "https://oceanservice.noaa.gov/facts/biggestocean.html",
+      "excerpt": "the Pacific is by far the largest of the world’s ocean basins"
+    }
+  },
+  {
+    "id": "e06",
+    "category": "cierta",
+    "expected": "Confirmada",
+    "text": "Marte tiene dos lunas, Fobos y Deimos.",
+    "reference": {
+      "url": "https://science.nasa.gov/mars/facts/",
+      "excerpt": "Mars has two small moons, Phobos and Deimos"
+    }
+  },
+  {
+    "id": "e07",
+    "category": "cierta",
+    "expected": "Confirmada",
+    "text": "Venus es el planeta más caliente del sistema solar.",
+    "reference": {
+      "url": "https://science.nasa.gov/venus/venus-facts/",
+      "excerpt": "It's the hottest planet in our solar system"
+    }
+  },
+  {
+    "id": "e08",
+    "category": "cierta",
+    "expected": "Confirmada",
+    "text": "El IPCC afirma que es inequívoco que la influencia humana ha calentado la atmósfera.",
+    "reference": {
+      "url": "https://www.ipcc.ch/report/ar6/wg1/chapter/summary-for-policymakers/",
+      "excerpt": "It is unequivocal that human influence has warmed the atmosphere, ocean and land."
+    }
+  },
+  {
+    "id": "e09",
+    "category": "falsa",
+    "expected": "Refutada",
+    "text": "Pablo Neruda recibió el Premio Nobel de Literatura en 1982.",
+    "reference": {
+      "url": "https://www.nobelprize.org/prizes/literature/1971/neruda/facts/",
+      "excerpt": "Nobel Prize in Literature 1971"
+    }
+  },
+  {
+    "id": "e10",
+    "category": "falsa",
+    "expected": "Refutada",
+    "text": "Júpiter es el planeta más pequeño del sistema solar.",
+    "reference": {
+      "url": "https://science.nasa.gov/jupiter/jupiter-facts/",
+      "excerpt": "It's the largest planet in our solar system"
+    }
+  },
+  {
+    "id": "e11",
+    "category": "falsa",
+    "expected": "Refutada",
+    "text": "La misión Apolo 11 aterrizó en la Luna en 1972.",
+    "reference": {
+      "url": "https://www.nasa.gov/mission/apollo-11/",
+      "excerpt": "Apollo 11, which landed on the moon in 1969"
+    }
+  },
+  {
+    "id": "e12",
+    "category": "falsa",
+    "expected": "Refutada",
+    "text": "La Declaración de Independencia de los Estados Unidos se adoptó en 1789.",
+    "reference": {
+      "url": "https://www.archives.gov/founding-docs/declaration-transcript",
+      "excerpt": "In Congress, July 4, 1776"
+    }
+  },
+  {
+    "id": "e13",
+    "category": "falsa",
+    "expected": "Refutada",
+    "text": "Marie Curie nunca recibió el Premio Nobel de Química.",
+    "reference": {
+      "url": "https://www.nobelprize.org/prizes/physics/1903/marie-curie/facts/",
+      "excerpt": "Also awarded: Nobel Prize in Chemistry 1911"
+    }
+  },
+  {
+    "id": "e14",
+    "category": "falsa",
+    "expected": "Refutada",
+    "text": "La malaria se transmite a las personas sobre todo por la picadura de pulgas.",
+    "reference": {
+      "url": "https://www.who.int/news-room/fact-sheets/detail/malaria",
+      "excerpt": "Malaria mostly spreads to people through the bites of some infected female Anopheles mosquitoes."
+    }
+  },
+  {
+    "id": "e15",
+    "category": "falsa",
+    "expected": "Refutada",
+    "text": "La mayor parte del agua de la Tierra es dulce.",
+    "reference": {
+      "url": "https://www.usgs.gov/special-topics/water-science-school/science/how-much-water-there-earth",
+      "excerpt": "The vast majority of water on the Earth's surface, over 96 percent, is saline water in the oceans."
+    }
+  },
+  {
+    "id": "e16",
+    "category": "engañosa",
+    "expected": "Refutada",
+    "text": "Albert Einstein recibió el Premio Nobel de Física por la teoría de la relatividad.",
+    "reference": {
+      "url": "https://www.nobelprize.org/prizes/physics/1921/einstein/facts/",
+      "excerpt": "especially for his discovery of the law of the photoelectric effect"
+    }
+  },
+  {
+    "id": "e17",
+    "category": "engañosa",
+    "expected": "Refutada",
+    "text": "El IPCC considera dudoso que la influencia humana haya calentado la atmósfera.",
+    "reference": {
+      "url": "https://www.ipcc.ch/report/ar6/wg1/chapter/summary-for-policymakers/",
+      "excerpt": "It is unequivocal that human influence has warmed the atmosphere, ocean and land."
+    }
+  },
+  {
+    "id": "e18",
+    "category": "engañosa",
+    "expected": "Refutada",
+    "text": "En 2024, la mayoría de las muertes por sarampión en el mundo se produjeron entre niños completamente vacunados.",
+    "reference": {
+      "url": "https://www.who.int/news-room/fact-sheets/detail/measles",
+      "excerpt": "mostly among unvaccinated or under vaccinated children under the age of 5 years"
+    }
+  },
+  {
+    "id": "e19",
+    "category": "desactualizada",
+    "expected": "Refutada",
+    "text": "La Unión Astronómica Internacional clasifica actualmente a Plutón como planeta y no como planeta enano.",
+    "reference": {
+      "url": "https://science.nasa.gov/dwarf-planets/pluto/facts/",
+      "excerpt": "Pluto was reclassified as a dwarf planet in 2006 by the International Astronomical Union"
+    }
+  },
+  {
+    "id": "e20",
+    "category": "desactualizada",
+    "expected": "Refutada",
+    "text": "Suecia no es miembro de la OTAN.",
+    "reference": {
+      "url": "https://www.nato.int/cps/en/natohq/topics_52044.htm",
+      "excerpt": "becoming NATO's 32nd member country"
+    }
+  },
+  {
+    "id": "e21",
+    "category": "desactualizada",
+    "expected": "Refutada",
+    "text": "La OMS mantiene la COVID-19 declarada como emergencia de salud pública de importancia internacional.",
+    "reference": {
+      "url": "https://www.who.int/news/item/05-05-2023-statement-on-the-fifteenth-meeting-of-the-international-health-regulations-(2005)-emergency-committee-regarding-the-coronavirus-disease-(covid-19)-pandemic",
+      "excerpt": "no longer constitutes a public health emergency of international concern"
+    }
+  },
+  {
+    "id": "e22",
+    "category": "no comprobable",
+    "expected": "Sin evidencia suficiente",
+    "text": "La librera Remedios Alcántara Villoslada vendió 87 libros el 14 de mayo de 2018.",
+    "reference": null
+  },
+  {
+    "id": "e23",
+    "category": "no comprobable",
+    "expected": "Sin evidencia suficiente",
+    "text": "El pastor Eutimio Barrachina Solozábal tenía 63 ovejas en enero de 1974.",
+    "reference": null
+  },
+  {
+    "id": "e24",
+    "category": "no comprobable",
+    "expected": "Sin evidencia suficiente",
+    "text": "La empresa Talleres Orvanza Quilmer facturó 218.430 euros en 2011.",
+    "reference": null
+  },
+  {
+    "id": "e25",
+    "category": "no comprobable",
+    "expected": "Sin evidencia suficiente",
+    "text": "El músico Leoncio Trasmiera Uruñuela ensayó cuatro horas el 9 de febrero de 2015.",
+    "reference": null
+  },
+  {
+    "id": "e26",
+    "category": "no comprobable",
+    "expected": "Sin evidencia suficiente",
+    "text": "La profesora Casilda Monterrubio Aizpún corrigió 31 exámenes el 2 de junio de 2016.",
+    "reference": null
+  }
+]
