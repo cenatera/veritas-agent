@@ -36,8 +36,10 @@ flowchart LR
 | [`src/agents/llm.py`](src/agents/llm.py) | Llamada a Claude con salida estructurada |
 | [`src/tools/search.py`](src/tools/search.py) | Búsqueda en Wikipedia y GDELT |
 | [`src/tools/fetcher.py`](src/tools/fetcher.py) | Descarga de páginas públicas |
+| [`src/tools/resilience.py`](src/tools/resilience.py) | Reintentos, espera exponencial y ritmo de peticiones |
 | [`src/orchestrator.py`](src/orchestrator.py) | Flujo, límites y aislamiento de fallos |
 | [`src/report.py`](src/report.py) | Informe Markdown, sin modelo de lenguaje |
+| [`src/guidance.py`](src/guidance.py) | Causas y acciones para el lector, con textos fijos |
 | [`src/costs.py`](src/costs.py) | Estimación de coste |
 | [`app.py`](app.py) | Interfaz Streamlit |
 | [`evals/`](evals/) | Casos, métricas y ejecutor de la evaluación |
@@ -57,6 +59,11 @@ Además:
 
 - **Los fallos son visibles.** Una afirmación no comprobada por límite o avería se
   distingue de una contrastada sin evidencia.
+- **Los fallos transitorios se reintentan.** Ante HTTP 429, 5xx, tiempo agotado o red se
+  espera de forma exponencial y se respeta `Retry-After`. GDELT se consulta como mucho
+  cada 10 segundos y queda en pausa si sigue fallando.
+- **El contexto no decide.** Los extractos relacionados son literales, pero nunca
+  influyen en el veredicto; su pertinencia la propone el modelo.
 - **La evidencia circular se filtra.** Se descartan páginas que reproducen la mitad o
   más del documento. No se detectan paráfrasis ni copias de textos breves.
 - **Las fechas no se infieren.** Solo se usa la publicación declarada por la página.

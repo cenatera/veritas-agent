@@ -18,6 +18,7 @@ from src.schemas import (
     ClaimAssessment,
     Confidence,
     Evidence,
+    RelatedExcerpt,
     RetrievedSource,
     Stance,
     VeritasModel,
@@ -25,6 +26,7 @@ from src.schemas import (
 )
 
 MIN_EXCERPT_WORDS = 3
+MAX_RELATED = 3
 
 SYSTEM_PROMPT = """\
 Contrastas una afirmación con documentos para un equipo de verificación \
@@ -39,6 +41,11 @@ contexto y conserven negaciones, condiciones y atribuciones.
 Incluye la evidencia relevante de ambos sentidos. Una mención de la afirmación \
 (un rumor, una cita ajena o un desmentido) no equivale a que la fuente la respalde. \
 Que los documentos no mencionen algo no lo contradice.
+
+related: hasta tres extractos sobre el mismo asunto concreto que ayuden a entenderlo \
+pero no respalden ni contradigan la afirmación. Misma regla de copia exacta; no \
+repitas los de evidence. Coincidir en una palabra no basta. Lista vacía si no hay o \
+si el veredicto es Confirmada.
 
 verdict:
 - Confirmada: toda la afirmación está respaldada y nada la contradice.
@@ -58,6 +65,7 @@ class VerificationDraft(VeritasModel):
     """Salida estructurada que se solicita al modelo, aún sin comprobar."""
 
     evidence: list[Evidence]
+    related: list[RelatedExcerpt]
     verdict: Verdict
     confidence: Confidence | None
     rationale: str
@@ -67,6 +75,13 @@ class RejectedEvidence(VeritasModel):
     """Evidencia descartada, conservada para revisión editorial."""
 
     evidence: Evidence
+    reason: str = Field(min_length=1)
+
+
+class RejectedRelated(VeritasModel):
+    """Contexto descartado, conservado para revisión editorial."""
+
+    related: RelatedExcerpt
     reason: str = Field(min_length=1)
 
 
@@ -83,6 +98,7 @@ class VerificationResult(VeritasModel):
     assessment: ClaimAssessment
     proposed_verdict: Verdict | None = None
     rejected: tuple[RejectedEvidence, ...] = ()
+    rejected_related: tuple[RejectedRelated, ...] = ()
     rejected_rationale: RejectedRationale | None = None
 
 
@@ -90,6 +106,44 @@ def _publisher(url: HttpUrl) -> str:
     """Aproxima el editor por su dominio; agrupa las ediciones de Wikipedia."""
     host = (url.host or "").lower().removeprefix("www.")
     return "wikipedia.org" if host.endswith(".wikipedia.org") else host
+
+
+def _excerpt_problem(
+    item: Evidence | RelatedExcerpt, sources: dict[str, RetrievedSource]
+) -> str | None:
+    """Motivo por el que un extracto no es comprobable; ``None`` si lo es."""
+    source = sources.get(item.source_id)
+    if source is None:
+        return "La fuente no existe."
+    if item.excerpt not in source.content:
+        return "El extracto no aparece literalmente en la fuente."
+    if len(re.findall(r"\w+", item.excerpt)) < MIN_EXCERPT_WORDS:
+        return "El extracto es demasiado breve."
+    return None
+
+
+def _filter_related(
+    draft: VerificationDraft, sources: dict[str, RetrievedSource], verdict: Verdict
+) -> tuple[list[RelatedExcerpt], list[RejectedRelated]]:
+    """Separa el contexto literal del descartado. No interviene en el veredicto."""
+    used = {(item.source_id, item.excerpt) for item in draft.evidence}
+    accepted: list[RelatedExcerpt] = []
+    rejected: list[RejectedRelated] = []
+    for item in draft.related:
+        reason = _excerpt_problem(item, sources)
+        if reason is None and verdict is Verdict.SUPPORTED:
+            reason = "Una afirmación confirmada no necesita contexto."
+        elif reason is None and (item.source_id, item.excerpt) in used:
+            reason = "El extracto ya se propuso como evidencia."
+        elif reason is None and item in accepted:
+            reason = "Contexto duplicado."
+        elif reason is None and len(accepted) == MAX_RELATED:
+            reason = "Se alcanzó el máximo de extractos de contexto."
+        if reason is None:
+            accepted.append(item)
+        else:
+            rejected.append(RejectedRelated(related=item, reason=reason))
+    return accepted, rejected
 
 
 def _filter_evidence(
@@ -103,13 +157,9 @@ def _filter_evidence(
         stances.setdefault((item.source_id, item.excerpt), set()).add(item.stance)
 
     for item in evidence:
-        source = sources.get(item.source_id)
-        if source is None:
-            reason = "La fuente no existe."
-        elif item.excerpt not in source.content:
-            reason = "El extracto no aparece literalmente en la fuente."
-        elif len(re.findall(r"\w+", item.excerpt)) < MIN_EXCERPT_WORDS:
-            reason = "El extracto es demasiado breve."
+        reason = _excerpt_problem(item, sources)
+        if reason is not None:
+            pass
         elif len(stances[item.source_id, item.excerpt]) > 1:
             reason = "El mismo extracto se usa en ambos sentidos."
         elif item in accepted:
@@ -132,7 +182,7 @@ def _derived_verdict(evidence: Sequence[Evidence]) -> Verdict:
 
 
 def _rationale_problem(
-    rationale: str, claim: Claim, evidence: Sequence[Evidence]
+    rationale: str, claim: Claim, evidence: Sequence[Evidence | RelatedExcerpt]
 ) -> str | None:
     """Motivo para descartar una justificación; ``None`` si es admisible."""
     number = r"\d+(?:[.,:/]\d+)*"
@@ -171,15 +221,16 @@ def check_draft(
         if len(publishers) < 2 or rejected:
             confidence = Confidence.MEDIUM
 
+    related, rejected_related = _filter_related(draft, by_id, verdict)
     rationale = draft.rationale.strip()
-    problem = _rationale_problem(rationale, claim, accepted)
+    problem = _rationale_problem(rationale, claim, [*accepted, *related])
     if changed:
         problem = "El veredicto propuesto fue ajustado."
         rationale = (
             f"Veredicto ajustado: se propuso «{draft.verdict.value}», pero la "
             "evidencia comprobada no lo sostiene."
         )
-    elif problem and accepted:
+    elif problem and (accepted or related):
         rationale = "Justificación del modelo descartada; consulte los extractos."
     elif problem:
         rationale = "Las fuentes consultadas no aportaron extractos utilizables."
@@ -190,10 +241,12 @@ def check_draft(
             verdict=verdict,
             confidence=confidence,
             evidence=tuple(accepted),
+            related=tuple(related),
             rationale=rationale,
         ),
         proposed_verdict=draft.verdict,
         rejected=tuple(rejected),
+        rejected_related=tuple(rejected_related),
         rejected_rationale=(
             RejectedRationale(text=draft.rationale, reason=problem) if problem else None
         ),

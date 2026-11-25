@@ -8,6 +8,8 @@ import pytest
 from src.orchestrator import AuditResult
 from src.report import render_markdown
 
+ISSUE = {"kind": "La fuente limitó temporalmente las peticiones", "origin": "Búsqueda en gdelt",
+         "detail": "Respuesta HTTP 429.", "attempts": 3}
 NOW = datetime(2026, 1, 2, 3, 4, tzinfo=UTC)
 EXCERPT = "El puente mide 10 metros."
 
@@ -42,11 +44,11 @@ def result(**changes: Any) -> AuditResult:
 def test_report_contains_verdicts_citations_and_dates() -> None:
     text = render_markdown(result(), NOW)
     assert "Generado: 2026-01-02 03:04 UTC" in text
-    assert "contrastadas: **1 de 2**" in text
-    assert "- Confirmada: 1" in text and "- Refutada: 0" in text
+    assert "Se contrastó **1 de 2 afirmaciones**" in text
+    assert "1 confirmada, 0 refutadas, 0 en disputa y 1 sin evidencia suficiente" in text
     assert f"«{EXCERPT}» — [Puentes](<https://example.org/a>) (publicada: 2024-03-05" in text
-    assert "| 2 | El puente es de 1900. | Sin evidencia suficiente | — | No comprobada por límite |" in text
-    assert "sin contrastar" in text
+    assert "| 2 | El puente es de 1900. | ○ Sin evidencia suficiente | — | No comprobada por límite |" in text
+    assert "Alcance limitado" in text and "a 2 en «Alcance»" in text
     assert text.index("no citadas") < text.index("example.net/b")
 
 
@@ -67,10 +69,12 @@ def test_missing_date_is_stated() -> None:
 
 def test_issues_and_adjustments_are_visible() -> None:
     text = render_markdown(result(trace={
-        "issues": ["Búsqueda en gdelt: Respuesta HTTP 429."], "proposed_verdict": "Refutada",
+        "issues": [ISSUE], "proposed_verdict": "Refutada",
         "rejected_evidence": [{"reason": "La fuente no existe.", "evidence": {
             "source_id": "s9", "excerpt": "texto inventado", "stance": "respalda"}}]}), NOW)
-    assert "HTTP 429" in text and "cobertura" in text
+    assert "HTTP 429" in text and "cobertura" in text and "Intentos: 3" in text
+    assert "limitó temporalmente las peticiones" in text
+    assert "no equivale a que la afirmación sea falsa" in text
     assert "ajustado: Refutada" in text and "La fuente no existe" in text
     assert "texto inventado" not in text
 
@@ -110,12 +114,35 @@ def test_empty_audit_and_rejected_claims() -> None:
     audit = AuditResult.model_validate({
         "report": {"document": "Hola.", "claims": [], "sources": [], "assessments": []},
         "traces": [], "rejected_claims": [{"reason": "La cita no aparece.", "draft": {
-            "statement": "dato inventado", "quote": "x", "search_query": "x"}}]})
+            "statement": "dato fabricado", "quote": "x", "search_query": "x"}}]})
     text = render_markdown(audit, NOW)
-    assert "ninguna afirmación verificable" in text and "La cita no aparece." in text
-    assert "dato inventado" not in text and "## Detalle" not in text
+    assert "ninguna afirmación comprobable" in text and "La cita no aparece." in text
+    assert "dato fabricado" not in text and "## Detalle" not in text and "propuso 1 afirmación" in text
 
 
 def test_naive_date_is_rejected() -> None:
     with pytest.raises(ValueError, match="zona horaria"):
         render_markdown(result(), datetime(2026, 1, 1))
+
+
+def test_related_context_is_quoted_and_labelled() -> None:
+    audit = result()
+    data = audit.model_dump(mode="json")
+    data["report"]["assessments"][1]["related"] = [{"source_id": "s1", "excerpt": EXCERPT}]
+    text = render_markdown(AuditResult.model_validate(data), NOW)
+    section = text[text.index("### 2."):]
+    assert "Contexto relacionado" in section and "No respaldan ni contradicen" in section
+    assert f"«{EXCERPT}» — [Puentes](<https://example.org/a>)" in section
+
+
+def test_evidence_is_grouped_by_stance() -> None:
+    text = render_markdown(result(), NOW)
+    assert "**Evidencia a favor**" in text and "Evidencia en contra" not in text
+
+
+def test_question_gets_reformulation_advice() -> None:
+    audit = AuditResult.model_validate({
+        "report": {"document": "¿Cuánto mide el puente?", "claims": [], "sources": [],
+                   "assessments": []}, "traces": []})
+    text = render_markdown(audit, NOW)
+    assert "es una pregunta" in text and "Escriba como afirmación" in text

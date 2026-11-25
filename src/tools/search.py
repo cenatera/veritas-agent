@@ -2,11 +2,12 @@
 
 Un resultado solo es una pista: su contenido no cuenta como evidencia hasta que
 ``PageFetcher`` descarga la página. «Sin resultados» y «el servicio falló» se
-distinguen siempre, para no confundir una avería con falta de evidencia.
+distinguen siempre, para no confundir una avería con falta de evidencia. Los fallos
+transitorios se reintentan.
 """
 
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from typing import Protocol
 from urllib.parse import quote
 
@@ -15,13 +16,29 @@ from pydantic import BaseModel, Field, HttpUrl, ValidationError
 
 from src.schemas import VeritasModel
 from src.tools.fetcher import USER_AGENT
+from src.tools.resilience import (
+    FailureKind,
+    Pacer,
+    RetryPolicy,
+    Sleep,
+    SourceError,
+    from_exception,
+    from_response,
+    with_retries,
+)
 
 TIMEOUT_SECONDS = 20.0
-GDELT_INTERVAL_SECONDS = 6.0
+# GDELT pide al menos 5 segundos entre peticiones; se deja margen.
+GDELT_INTERVAL_SECONDS = 10.0
+GDELT_COOLDOWN_SECONDS = 120.0
+WIKIPEDIA_RETRIES = RetryPolicy(attempts=3, base_seconds=1.0)
+GDELT_RETRIES = RetryPolicy(attempts=3, base_seconds=6.0, max_seconds=30.0)
+# Compartido: cada auditoría crea su buscador, pero el límite es del equipo.
+GDELT_PACER = Pacer(GDELT_INTERVAL_SECONDS)
 GDELT_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 
 
-class SearchError(RuntimeError):
+class SearchError(SourceError):
     """El servicio no respondió o lo hizo de forma inesperada."""
 
 
@@ -38,6 +55,8 @@ class SearchFailure(VeritasModel):
 
     provider: str = Field(min_length=1)
     reason: str = Field(min_length=1)
+    kind: FailureKind = FailureKind.OTHER
+    attempts: int = Field(default=1, ge=0)
 
 
 class SearchOutcome(VeritasModel):
@@ -86,28 +105,41 @@ def _get(client: httpx2.Client, url: str, params: dict[str, str]) -> bytes:
     try:
         response = client.get(url, params=params)
     except httpx2.HTTPError as error:
-        raise SearchError(f"Fallo de red: {type(error).__name__}.") from error
+        raise from_exception(SearchError, error) from error
     if response.status_code != 200:
-        raise SearchError(f"Respuesta HTTP {response.status_code}.")
+        raise from_response(SearchError, response)
     return response.content
 
 
 class WikipediaSearch:
     """Búsqueda en Wikipedia."""
 
-    def __init__(self, language: str = "es", client: httpx2.Client | None = None) -> None:
+    def __init__(
+        self,
+        language: str = "es",
+        client: httpx2.Client | None = None,
+        retries: RetryPolicy = WIKIPEDIA_RETRIES,
+        sleep: Sleep = time.sleep,
+    ) -> None:
         """Selecciona la edición por su código de idioma."""
         if not language.replace("-", "").isascii() or not language.replace("-", "").isalpha():
             raise ValueError("Código de idioma no válido.")
         self.name = f"wikipedia-{language}"
         self._base = f"https://{language}.wikipedia.org"
         self._client = client or _default_client()
+        self._retries = retries
+        self._sleep = sleep
 
     def search(self, query: str, limit: int) -> list[SearchHit]:
         """Busca artículos por texto."""
-        body = _get(
-            self._client, f"{self._base}/w/rest.php/v1/search/page",
-            {"q": query, "limit": str(limit)},
+        body = with_retries(
+            lambda: _get(
+                self._client,
+                f"{self._base}/w/rest.php/v1/search/page",
+                {"q": query, "limit": str(limit)},
+            ),
+            self._retries,
+            self._sleep,
         )
         try:
             pages = _WikiResponse.model_validate_json(body).pages
@@ -130,36 +162,56 @@ class GdeltSearch:
     def __init__(
         self,
         client: httpx2.Client | None = None,
-        sleep: Callable[[float], None] = time.sleep,
-        clock: Callable[[], float] = time.monotonic,
+        pacer: Pacer = GDELT_PACER,
+        retries: RetryPolicy = GDELT_RETRIES,
+        sleep: Sleep = time.sleep,
     ) -> None:
-        """Permite inyectar el cliente HTTP y el reloj."""
+        """Permite inyectar el cliente HTTP, el ritmo y los reintentos."""
         self._client = client or _default_client()
+        self._pacer = pacer
+        self._retries = retries
         self._sleep = sleep
-        self._clock = clock
-        self._next_request = float("-inf")
 
-    def _wait_turn(self) -> None:
-        """Espacia las peticiones: GDELT limita su frecuencia."""
-        delay = self._next_request - self._clock()
-        if delay > 0:
-            self._sleep(delay)
-        self._next_request = self._clock() + GDELT_INTERVAL_SECONDS
-
-    def search(self, query: str, limit: int) -> list[SearchHit]:
-        """Busca noticias que coincidan con la consulta."""
-        self._wait_turn()
+    def _request(self, query: str, limit: int) -> _GdeltResponse:
+        """Un intento, a su turno."""
+        self._pacer.wait()
         body = _get(self._client, GDELT_URL, {
             "query": query, "mode": "artlist", "format": "json", "maxrecords": str(limit),
         })
         try:
-            # Los errores de GDELT llegan como texto plano con estado 200.
-            articles = _GdeltResponse.model_validate_json(body).articles
+            return _GdeltResponse.model_validate_json(body)
         except ValidationError as error:
+            # GDELT comunica algunos límites en texto plano con estado 200.
+            if b"limit requests" in body[:500].lower():
+                raise SearchError(
+                    "El servicio pidió reducir las peticiones.", FailureKind.RATE_LIMITED
+                ) from error
             raise SearchError("Respuesta no reconocida.") from error
+
+    def search(self, query: str, limit: int) -> list[SearchHit]:
+        """Busca noticias que coincidan con la consulta.
+
+        Si el servicio sigue fallando tras los reintentos, queda en pausa para no
+        agravar el límite ni retrasar las demás afirmaciones.
+        """
+        paused = self._pacer.paused()
+        if paused is not None:
+            error = SearchError("Servicio en pausa por un fallo reciente.", paused)
+            error.attempts = 0
+            raise error
+        try:
+            response = with_retries(
+                lambda: self._request(query, limit), self._retries, self._sleep
+            )
+        except SearchError as error:
+            if error.kind.is_transient:
+                self._pacer.pause(
+                    max(GDELT_COOLDOWN_SECONDS, error.retry_after or 0.0), error.kind
+                )
+            raise
         return [
             SearchHit(url=item.url, title=item.title, provider=self.name)
-            for item in articles[:limit]
+            for item in response.articles[:limit]
         ]
 
 
@@ -181,5 +233,10 @@ def search_sources(
             for hit in provider.search(query.strip(), limit):
                 hits.setdefault(hit.url, hit)
         except SearchError as error:
-            failures.append(SearchFailure(provider=provider.name, reason=str(error)))
+            failures.append(SearchFailure(
+                provider=provider.name,
+                reason=str(error),
+                kind=error.kind,
+                attempts=error.attempts,
+            ))
     return SearchOutcome(hits=tuple(hits.values()), failures=tuple(failures))

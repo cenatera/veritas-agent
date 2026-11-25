@@ -20,6 +20,7 @@ from src.agents.verifier import (
     ClaimVerifier,
     RejectedEvidence,
     RejectedRationale,
+    RejectedRelated,
     VerificationResult,
 )
 from src.schemas import (
@@ -31,6 +32,7 @@ from src.schemas import (
     Verdict,
 )
 from src.tools.fetcher import FetchError, PageFetcher
+from src.tools.resilience import FailureKind
 from src.tools.search import (
     GdeltSearch,
     SearchHit,
@@ -40,6 +42,8 @@ from src.tools.search import (
     search_sources,
 )
 
+# Máximo que ofrece la interfaz en «Alcance».
+MAX_CLAIMS = 10
 SHINGLE_WORDS = 8
 MIN_COPY_WORDS = 40
 COPY_RATIO = 0.5
@@ -72,24 +76,68 @@ class ClaimStatus(str, Enum):
     FAILED = "No comprobada por fallo"
 
 
+class IssueKind(str, Enum):
+    """Clase de incidencia registrada durante una auditoría."""
+
+    RATE_LIMITED = "La fuente limitó temporalmente las peticiones"
+    SERVER = "La fuente falló al responder"
+    TIMEOUT = "La fuente no respondió a tiempo"
+    NETWORK = "No se pudo conectar con la fuente"
+    UNUSABLE = "La fuente no ofreció contenido utilizable"
+    NO_RESULTS = "La búsqueda no devolvió resultados"
+    COPY = "La página reproduce el documento auditado"
+    TOO_LARGE = "La página supera el límite de texto"
+    VERIFIER = "El modelo verificador no completó la respuesta"
+
+    @property
+    def is_outage(self) -> bool:
+        """Indica un fallo temporal de una fuente, ajeno a su contenido."""
+        return self in {
+            IssueKind.RATE_LIMITED,
+            IssueKind.SERVER,
+            IssueKind.TIMEOUT,
+            IssueKind.NETWORK,
+        }
+
+
+_ISSUE_BY_FAILURE = {
+    FailureKind.RATE_LIMITED: IssueKind.RATE_LIMITED,
+    FailureKind.SERVER: IssueKind.SERVER,
+    FailureKind.TIMEOUT: IssueKind.TIMEOUT,
+    FailureKind.NETWORK: IssueKind.NETWORK,
+    FailureKind.OTHER: IssueKind.UNUSABLE,
+}
+
+
+class Issue(VeritasModel):
+    """Incidencia con su origen y el detalle técnico."""
+
+    kind: IssueKind
+    origin: str = Field(min_length=1)
+    detail: str = ""
+    attempts: int = Field(default=1, ge=0, description="Cero si no llegó a consultarse.")
+
+    def describe(self) -> str:
+        """Descripción en una línea."""
+        parts = [f"{self.origin}: {self.kind.value.lower()}."]
+        if self.detail:
+            parts.append(self.detail)
+        if self.attempts > 1:
+            parts.append(f"Intentos: {self.attempts}.")
+        return " ".join(parts)
+
+
 class ClaimTrace(VeritasModel):
     """Recorrido de una afirmación, para auditoría editorial."""
 
     claim_id: str = Field(min_length=1)
     status: ClaimStatus
     source_ids: tuple[str, ...] = ()
-    issues: tuple[str, ...] = ()
+    issues: tuple[Issue, ...] = ()
     proposed_verdict: Verdict | None = None
     rejected_evidence: tuple[RejectedEvidence, ...] = ()
+    rejected_related: tuple[RejectedRelated, ...] = ()
     rejected_rationale: RejectedRationale | None = None
-
-
-class AuditResult(VeritasModel):
-    """Informe validado y registro de todo lo descartado o fallido."""
-
-    report: AuditReport
-    traces: tuple[ClaimTrace, ...]
-    rejected_claims: tuple[RejectedClaim, ...] = ()
 
 
 class AuditLimits(VeritasModel):
@@ -101,6 +149,15 @@ class AuditLimits(VeritasModel):
         default=200_000, ge=1, description="Total por afirmación; nunca se recorta una fuente."
     )
     hits_per_provider: int = Field(default=5, ge=1, le=50)
+
+
+class AuditResult(VeritasModel):
+    """Informe validado y registro de todo lo descartado o fallido."""
+
+    report: AuditReport
+    traces: tuple[ClaimTrace, ...]
+    rejected_claims: tuple[RejectedClaim, ...] = ()
+    limits: AuditLimits | None = None
 
 
 def _shingles(text: str) -> set[tuple[str, ...]]:
@@ -120,6 +177,13 @@ def is_copy(document: str, content: str) -> bool:
         return False
     original = _shingles(document)
     return len(original & _shingles(content)) / len(original) >= COPY_RATIO
+
+
+def _provider_name(name: str) -> str:
+    """Nombre legible de un buscador."""
+    if name.startswith("wikipedia-"):
+        return f"Wikipedia ({name.removeprefix('wikipedia-')})"
+    return "GDELT" if name == GdeltSearch.name else name
 
 
 def _interleave(hits: Sequence[SearchHit]) -> list[SearchHit]:
@@ -146,7 +210,7 @@ class _Run:
         self._providers = providers
         self._limits = limits
         self._searches: dict[str, SearchOutcome] = {}
-        self._pages: dict[str, RetrievedSource | str] = {}
+        self._pages: dict[str, RetrievedSource | Issue] = {}
 
     def _search(self, query: str) -> SearchOutcome:
         if query not in self._searches:
@@ -155,36 +219,49 @@ class _Run:
             )
         return self._searches[query]
 
-    def _page(self, url: str) -> RetrievedSource | str:
-        """Devuelve la fuente o el motivo por el que no puede usarse."""
+    def _page(self, url: str) -> RetrievedSource | Issue:
+        """Devuelve la fuente o la incidencia por el que no puede usarse."""
         if url not in self._pages:
             try:
                 page = self._fetcher.fetch(url)
             except FetchError as error:
-                self._pages[url] = str(error)
+                self._pages[url] = Issue(
+                    kind=_ISSUE_BY_FAILURE[error.kind],
+                    origin=url,
+                    detail=str(error),
+                    attempts=error.attempts,
+                )
             else:
                 copied = is_copy(self.document, page.content)
-                self._pages[url] = "Reproduce el documento auditado." if copied else page
+                self._pages[url] = Issue(kind=IssueKind.COPY, origin=url) if copied else page
         return self._pages[url]
 
-    def collect(self, claim: Claim) -> tuple[list[RetrievedSource], list[str]]:
+    def collect(self, claim: Claim) -> tuple[list[RetrievedSource], list[Issue]]:
         """Reúne fuentes para una afirmación y anota las incidencias."""
         outcome = self._search(claim.search_query)
-        issues = [f"Búsqueda en {f.provider}: {f.reason}" for f in outcome.failures]
+        issues = [
+            Issue(
+                kind=_ISSUE_BY_FAILURE[failure.kind],
+                origin=f"Búsqueda en {_provider_name(failure.provider)}",
+                detail=failure.reason,
+                attempts=failure.attempts,
+            )
+            for failure in outcome.failures
+        ]
         if not outcome.hits and not outcome.failures:
-            issues.append("La búsqueda no devolvió resultados.")
+            issues.append(Issue(kind=IssueKind.NO_RESULTS, origin="Búsqueda"))
         selected: dict[str, RetrievedSource] = {}
         size = 0
         for hit in _interleave(outcome.hits):
             if len(selected) == self._limits.max_sources:
                 break
             page = self._page(str(hit.url))
-            if isinstance(page, str):
-                issues.append(f"{hit.url}: {page}")
+            if isinstance(page, Issue):
+                issues.append(page)
             elif page.id in selected:
                 continue
             elif size + len(page.content) > self._limits.max_source_chars:
-                issues.append(f"{hit.url}: Omitida por superar el límite de texto.")
+                issues.append(Issue(kind=IssueKind.TOO_LARGE, origin=str(hit.url)))
             else:
                 selected[page.id] = page
                 size += len(page.content)
@@ -250,6 +327,7 @@ class VeritasPipeline:
             ),
             traces=tuple(traces),
             rejected_claims=extraction.rejected,
+            limits=self._limits,
         )
 
     def _check(self, claim: Claim, run: _Run) -> tuple[ClaimAssessment, ClaimTrace]:
@@ -275,7 +353,7 @@ class VeritasPipeline:
                 claim,
                 ClaimStatus.FAILED,
                 "La verificación no pudo completarse.",
-                [*issues, f"Verificador: {detail}"],
+                [*issues, Issue(kind=IssueKind.VERIFIER, origin="Verificador", detail=detail)],
                 source_ids,
             )
         return result.assessment, ClaimTrace(
@@ -285,6 +363,7 @@ class VeritasPipeline:
             issues=tuple(issues),
             proposed_verdict=result.proposed_verdict,
             rejected_evidence=result.rejected,
+            rejected_related=result.rejected_related,
             rejected_rationale=result.rejected_rationale,
         )
 
@@ -293,7 +372,7 @@ class VeritasPipeline:
         claim: Claim,
         status: ClaimStatus,
         rationale: str,
-        issues: Sequence[str] = (),
+        issues: Sequence[Issue] = (),
         source_ids: tuple[str, ...] = (),
     ) -> tuple[ClaimAssessment, ClaimTrace]:
         """Resultado de una afirmación que no llegó a contrastarse."""

@@ -75,6 +75,13 @@ class Evidence(VeritasModel):
     stance: Stance
 
 
+class RelatedExcerpt(VeritasModel):
+    """Extracto literal sobre el tema que no respalda ni contradice la afirmación."""
+
+    source_id: str = Field(min_length=1)
+    excerpt: str = Field(min_length=1, pattern=r"\S")
+
+
 class ClaimAssessment(VeritasModel):
     """Veredicto sobre una afirmación y la evidencia que lo sostiene."""
 
@@ -82,6 +89,9 @@ class ClaimAssessment(VeritasModel):
     verdict: Verdict
     confidence: Optional[Confidence] = None
     evidence: tuple[Evidence, ...] = ()
+    related: tuple[RelatedExcerpt, ...] = Field(
+        default=(), description="Contexto citado; nunca influye en el veredicto."
+    )
     rationale: str = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -130,7 +140,7 @@ class AuditReport(VeritasModel):
             if not self.document.startswith(claim.quote, claim.start):
                 raise ValueError(f"La cita de {claim.id} no está en el documento.")
         for assessment in self.assessments:
-            for item in assessment.evidence:
+            for item in (*assessment.evidence, *assessment.related):
                 source = sources.get(item.source_id)
                 if source is None:
                     raise ValueError(f"Fuente inexistente: {item.source_id}.")

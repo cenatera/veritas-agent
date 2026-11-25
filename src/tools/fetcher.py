@@ -8,6 +8,7 @@ import hashlib
 import ipaddress
 import json
 import socket
+import time
 from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime
 from typing import Any
@@ -18,17 +19,27 @@ from lxml import etree, html as lxml_html
 from pydantic import ValidationError
 
 from src.schemas import RetrievedSource
+from src.tools.resilience import (
+    FailureKind,
+    RetryPolicy,
+    Sleep,
+    SourceError,
+    from_exception,
+    from_response,
+    with_retries,
+)
 
 USER_AGENT = "VeritasAgent/0.1 (fact-checking research tool)"
 MAX_BYTES = 3_000_000
 MAX_REDIRECTS = 5
 TIMEOUT_SECONDS = 15.0
+FETCH_RETRIES = RetryPolicy(attempts=2, base_seconds=1.5)
 ARTICLE_TYPES = {"Article", "NewsArticle", "ReportageNewsArticle", "BlogPosting", "Report"}
 
 Resolver = Callable[[str, int], list[str]]
 
 
-class FetchError(RuntimeError):
+class FetchError(SourceError):
     """No se pudo obtener contenido utilizable de una URL."""
 
 
@@ -48,7 +59,11 @@ def _public_address(url: httpx2.URL, resolver: Resolver) -> str:
         addresses = resolver(url.host, port)
         parsed = [ipaddress.ip_address(address) for address in addresses]
     except (OSError, ValueError) as error:
-        raise FetchError("No se pudo resolver el dominio.") from error
+        temporary = isinstance(error, socket.gaierror) and error.errno == socket.EAI_AGAIN
+        raise FetchError(
+            "No se pudo resolver el dominio.",
+            FailureKind.NETWORK if temporary else FailureKind.OTHER,
+        ) from error
     if not parsed or any(not ip.is_global or ip.is_multicast for ip in parsed):
         raise FetchError("El dominio apunta a una dirección no pública.")
     # IPv4 primero: muchas redes no tienen salida IPv6.
@@ -98,9 +113,13 @@ class PageFetcher:
     """Descarga páginas con límites de destino, tamaño y tiempo de espera."""
 
     def __init__(
-        self, client: httpx2.Client | None = None, resolver: Resolver = resolve_host
+        self,
+        client: httpx2.Client | None = None,
+        resolver: Resolver = resolve_host,
+        retries: RetryPolicy = FETCH_RETRIES,
+        sleep: Sleep = time.sleep,
     ) -> None:
-        """Permite inyectar el cliente y la resolución DNS."""
+        """Permite inyectar el cliente, la resolución DNS y los reintentos."""
         # Sin conexiones persistentes: dos dominios pueden compartir IP.
         self._client = client or httpx2.Client(
             timeout=TIMEOUT_SECONDS,
@@ -108,6 +127,8 @@ class PageFetcher:
             limits=httpx2.Limits(max_keepalive_connections=0),
         )
         self._resolver = resolver
+        self._retries = retries
+        self._sleep = sleep
 
     def fetch(self, url: str) -> RetrievedSource:
         """Descarga ``url`` y devuelve su texto principal.
@@ -115,10 +136,9 @@ class PageFetcher:
         Raises:
             FetchError: URL no permitida, fallo HTTP o contenido no utilizable.
         """
-        try:
-            final_url, media_type, encoding, body = self._download(httpx2.URL(url))
-        except (httpx2.HTTPError, httpx2.InvalidURL, UnicodeError) as error:
-            raise FetchError(f"Fallo de descarga: {type(error).__name__}.") from error
+        final_url, media_type, encoding, body = with_retries(
+            lambda: self._attempt(url), self._retries, self._sleep
+        )
 
         title: str | None = None
         published_on: date | None = None
@@ -156,6 +176,13 @@ class PageFetcher:
         except ValidationError as error:
             raise FetchError("La fuente no cumple el contrato de datos.") from error
 
+    def _attempt(self, url: str) -> tuple[httpx2.URL, str, str | None, bytes]:
+        """Un intento de descarga, con los fallos ya clasificados."""
+        try:
+            return self._download(httpx2.URL(url))
+        except (httpx2.HTTPError, httpx2.InvalidURL, UnicodeError) as error:
+            raise from_exception(FetchError, error) from error
+
     def _download(self, url: httpx2.URL) -> tuple[httpx2.URL, str, str | None, bytes]:
         """Sigue redirecciones comprobadas y lee el cuerpo con límite."""
         for _ in range(MAX_REDIRECTS + 1):
@@ -178,7 +205,7 @@ class PageFetcher:
                     url = url.join(response.headers["location"])
                     continue
                 if response.status_code != 200:
-                    raise FetchError(f"Respuesta HTTP {response.status_code}.")
+                    raise from_response(FetchError, response)
                 media_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
                 if media_type not in {"text/html", "application/xhtml+xml", "text/plain"}:
                     raise FetchError(f"Tipo no admitido: {media_type or 'desconocido'}.")

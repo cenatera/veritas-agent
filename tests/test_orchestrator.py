@@ -9,9 +9,10 @@ import pytest
 from src.agents.extractor import ClaimDraft, ExtractionResult, RejectedClaim
 from src.agents.llm import ModelOutputError
 from src.agents.verifier import VerificationResult
-from src.orchestrator import AuditLimits, AuditResult, ClaimStatus, VeritasPipeline, is_copy
+from src.orchestrator import AuditLimits, AuditResult, ClaimStatus, IssueKind, VeritasPipeline, is_copy
 from src.schemas import Claim, ClaimAssessment, Evidence, RetrievedSource, Stance, Verdict
 from src.tools.fetcher import FetchError
+from src.tools.resilience import FailureKind
 from src.tools.search import SearchError, SearchHit
 
 DOCUMENT = "Uno mide 1. Dos mide 2. Tres mide 3."
@@ -76,7 +77,7 @@ class FakeProvider:
     def search(self, query: str, limit: int) -> list[SearchHit]:
         self.queries.append(query)
         if self.paths is None:
-            raise SearchError("Respuesta HTTP 429.")
+            raise SearchError("Respuesta HTTP 429.", FailureKind.RATE_LIMITED)
         return [SearchHit.model_validate({"url": f"https://{self.name}.test/{p}", "provider": self.name})
                 for p in self.paths[:limit]]
 
@@ -111,7 +112,7 @@ def test_pages_and_searches_are_cached() -> None:
     result = audit([provider], claims=same_query, fetcher=fetcher)
     assert len(fetcher.calls) == 2 and provider.queries == ["tema"]
     assert len(result.report.sources) == 1
-    assert all(any("404" in i for i in t.issues) for t in result.traces)
+    assert all(any("404" in i.detail for i in t.issues) for t in result.traces)
 
 
 def test_claim_limit_is_reported() -> None:
@@ -125,8 +126,8 @@ def test_claim_limit_is_reported() -> None:
 def test_search_failure_differs_from_no_results() -> None:
     failed, empty = audit([FakeProvider("a", None)]), audit([FakeProvider("a", [])])
     assert failed.traces[0].status is empty.traces[0].status is ClaimStatus.NO_SOURCES
-    assert "429" in failed.traces[0].issues[0]
-    assert "no devolvió resultados" in empty.traces[0].issues[0]
+    assert "429" in failed.traces[0].issues[0].detail
+    assert empty.traces[0].issues[0].kind is IssueKind.NO_RESULTS
 
 
 def test_partial_failures_do_not_stop_the_audit() -> None:
@@ -150,7 +151,7 @@ def test_sources_alternate_providers() -> None:
 def test_oversized_source_is_skipped_not_cut() -> None:
     result = audit([FakeProvider("a", ["1"])], fetcher=FakeFetcher("x" * 11), max_source_chars=10)
     assert result.traces[0].status is ClaimStatus.NO_SOURCES
-    assert "límite de texto" in result.traces[0].issues[0]
+    assert result.traces[0].issues[0].kind is IssueKind.TOO_LARGE
 
 
 @pytest.mark.parametrize("error", [
@@ -179,7 +180,7 @@ def test_copy_of_the_document_is_not_evidence() -> None:
     result = audit([FakeProvider("a", ["1"])], document=document,
                    fetcher=FakeFetcher(f"Portada. {document.upper()} Pie."))
     assert result.traces[0].status is ClaimStatus.NO_SOURCES
-    assert "Reproduce" in result.traces[0].issues[0]
+    assert result.traces[0].issues[0].kind is IssueKind.COPY
 
 
 def test_copy_detection_ignores_short_or_different_texts() -> None:
@@ -194,3 +195,18 @@ def test_progress_is_reported() -> None:
     VeritasPipeline(FakeExtractor(CLAIMS), FakeVerifier(), FakeFetcher(), [FakeProvider("a", ["1"])]
                     ).run(DOCUMENT, lambda done, total: steps.append((done, total)))
     assert steps == [(0, 3), (1, 3), (2, 3), (3, 3)]
+
+
+@pytest.mark.parametrize(("name", "shown"), [
+    ("gdelt", "GDELT"), ("wikipedia-es", "Wikipedia (es)"), ("otro", "otro")])
+def test_providers_have_readable_names(name: str, shown: str) -> None:
+    assert audit([FakeProvider(name, None)]).traces[0].issues[0].origin == f"Búsqueda en {shown}"
+
+
+def test_outages_are_classified_and_limits_recorded() -> None:
+    result = audit([FakeProvider("a", None), FakeProvider("b", ["roto", "1"])], max_claims=2)
+    search, page = result.traces[0].issues
+    assert search.kind is IssueKind.RATE_LIMITED and search.kind.is_outage
+    assert page.kind is IssueKind.UNUSABLE and not page.kind.is_outage
+    assert "limitó temporalmente" in search.describe().lower()
+    assert result.limits is not None and result.limits.max_claims == 2

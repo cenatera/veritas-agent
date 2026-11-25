@@ -21,7 +21,7 @@ def page(head: str = "", text: str = TEXT) -> str:
 def make(handler: Callable[[httpx2.Request], httpx2.Response], ip: str = PUBLIC_IP) -> PageFetcher:
     """Descargador con transporte y DNS simulados."""
     client = httpx2.Client(transport=httpx2.MockTransport(handler))
-    return PageFetcher(client, lambda host, port: [ip])
+    return PageFetcher(client, lambda host, port: [ip], sleep=lambda seconds: None)
 
 
 def html(body: str, **headers: str) -> httpx2.Response:
@@ -141,3 +141,28 @@ def test_cookies_are_not_shared_between_requests() -> None:
     agent.fetch("https://uno.test")
     agent.fetch("https://dos.test")
     assert cookies == [None, None]
+
+
+@pytest.mark.parametrize(("status", "calls"), [(429, 2), (503, 2), (404, 1), (403, 1)])
+def test_only_transient_statuses_are_retried(status: int, calls: int) -> None:
+    seen: list[int] = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        seen.append(1)
+        return httpx2.Response(status)
+
+    with pytest.raises(FetchError) as caught:
+        make(handle).fetch("https://example.org")
+    assert len(seen) == calls == caught.value.attempts
+    assert caught.value.kind.is_transient == (calls == 2)
+
+
+def test_recovers_after_one_failure() -> None:
+    responses = [httpx2.Response(503), html(page())]
+    assert "puente" in make(lambda r: responses.pop(0)).fetch("https://example.org").content
+
+
+def test_blocked_address_is_never_retried() -> None:
+    with pytest.raises(FetchError) as caught:
+        make(lambda r: html(page()), "127.0.0.1").fetch("https://example.org")
+    assert caught.value.attempts == 1

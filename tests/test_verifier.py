@@ -33,7 +33,7 @@ def ev(stance: str = "respalda", excerpt: str | None = None, source_id: str = "s
 
 def draft(**changes: Any) -> dict[str, Any]:
     """Propuesta válida con los cambios indicados."""
-    return {"evidence": [ev(), ev(source_id="s2")], "verdict": "Confirmada",
+    return {"evidence": [ev(), ev(source_id="s2")], "related": [], "verdict": "Confirmada",
             "confidence": "alta", "rationale": "Ambas fuentes lo indican.", **changes}
 
 
@@ -171,3 +171,63 @@ def test_rationale_without_evidence_gets_useful_text() -> None:
                    rationale="Solo consta algo de 1999.")
     assert "no aportaron extractos" in result.assessment.rationale
     assert result.rejected_rationale is not None and "1999" in result.rejected_rationale.reason
+
+
+CONTEXT = "El puente se abrió en 1950 al público."
+
+
+def related(excerpt: str = CONTEXT, source_id: str = "s1") -> dict[str, str]:
+    """Contexto ficticio."""
+    return {"source_id": source_id, "excerpt": excerpt}
+
+
+def check_context(**changes: Any) -> VerificationResult:
+    """Comprueba una propuesta con contexto disponible en las fuentes."""
+    sources = [source("s1", "uno.test", f"{YES} {NO} {CONTEXT}"), SOURCES[1]]
+    return check(sources, **changes)
+
+
+@pytest.mark.parametrize(("verdict", "evidence"), [
+    ("Sin evidencia suficiente", []), ("Refutada", [ev("contradice")]),
+    ("En disputa", [ev(), ev("contradice")]),
+])
+def test_literal_context_is_kept_without_changing_the_verdict(
+    verdict: str, evidence: list[dict[str, str]]
+) -> None:
+    result = check_context(verdict=verdict, evidence=evidence, related=[related()])
+    assert result.assessment.verdict.value == verdict
+    assert result.assessment.related[0].excerpt == CONTEXT
+
+
+def test_context_alone_never_confirms() -> None:
+    result = check_context(verdict="Confirmada", evidence=[], related=[related()])
+    assert result.assessment.verdict.value == "Sin evidencia suficiente"
+
+
+@pytest.mark.parametrize(("item", "reason"), [
+    (related("Dato inventado por completo"), "literalmente"), (related(source_id="s9"), "no existe"),
+    (related("se abrió"), "breve"), (related(NO), "ya se propuso"),
+])
+def test_unverifiable_context_is_rejected(item: dict[str, str], reason: str) -> None:
+    result = check_context(verdict="Refutada", evidence=[ev("contradice")], related=[item])
+    assert result.assessment.related == () and reason in result.rejected_related[0].reason
+
+
+def test_context_is_dropped_when_confirmed_and_capped() -> None:
+    assert check_context(related=[related()]).assessment.related == ()
+    many = [related(), related(CONTEXT[:30]), related(CONTEXT[:25]), related(CONTEXT[:20]), related()]
+    result = check_context(verdict="Sin evidencia suficiente", evidence=[], related=many)
+    assert len(result.assessment.related) == 3 and len(result.rejected_related) == 2
+
+
+def test_rationale_may_use_figures_from_context() -> None:
+    result = check_context(verdict="Sin evidencia suficiente", evidence=[], confidence=None,
+                           related=[related()], rationale="Solo consta que se abrió en 1950.")
+    assert result.rejected_rationale is None
+
+
+def test_report_rejects_untraceable_context() -> None:
+    result = check_context(verdict="Refutada", evidence=[ev("contradice")], related=[related()])
+    with pytest.raises(ValueError, match="Extracto ausente"):
+        AuditReport(document="El puente mide 10 metros.", claims=(CLAIM,), sources=tuple(SOURCES),
+                    assessments=(result.assessment,))

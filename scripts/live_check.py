@@ -67,7 +67,7 @@ def main() -> None:
               f"{trace.status.value}\n  {item.rationale}")
         for evidence in item.evidence:
             print(f"  - {evidence.stance.value}: «{evidence.excerpt}» {urls[evidence.source_id]}")
-        for note in (*trace.issues, *(r.reason for r in trace.rejected_evidence)):
+        for note in (*(i.describe() for i in trace.issues), *(r.reason for r in trace.rejected_evidence)):
             print(f"  ! {note}")
         for key in EXPECTED:
             if key in claim.statement:

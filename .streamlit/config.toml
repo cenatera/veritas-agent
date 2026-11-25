@@ -7,3 +7,28 @@ gatherUsageStats = false
 
 [client]
 toolbarMode = "minimal"
+
+# Solo tipografías del sistema: la interfaz no descarga fuentes de terceros.
+[theme]
+font = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
+headingFont = "Charter, 'Iowan Old Style', 'Palatino Linotype', Georgia, serif"
+baseFontSize = 16
+baseRadius = "0.5rem"
+buttonRadius = "0.5rem"
+showWidgetBorder = true
+
+[theme.light]
+primaryColor = "#1F4E79"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F6F8"
+textColor = "#1C2430"
+borderColor = "#D5DBE2"
+linkColor = "#1F4E79"
+
+[theme.dark]
+primaryColor = "#4C86BD"
+backgroundColor = "#12171E"
+secondaryBackgroundColor = "#1B222C"
+textColor = "#E6EAF0"
+borderColor = "#34404E"
+linkColor = "#8FBCE6"

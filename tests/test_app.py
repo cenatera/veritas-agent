@@ -64,7 +64,8 @@ def test_nothing_runs_without_consent(calls: list[tuple[str, AuditLimits]]) -> N
 def test_shows_report_and_does_not_rerun(calls: list[tuple[str, AuditLimits]]) -> None:
     app = submit(start())
     assert not app.exception
-    assert any("# Informe de verificación" in m.value for m in app.markdown)
+    assert "Informe de verificación" in [h.value for h in app.header]
+    assert sum(m.value.startswith("#### ") and m.value[5].isdigit() for m in app.markdown) == 3
     assert calls[0][0] == "es" and calls[0][1].max_claims == 3
     app.run()
     assert len(calls) == 1
@@ -94,4 +95,41 @@ def test_errors_are_explained(
     monkeypatch.setattr(orchestrator, "build_pipeline", lambda language, limits: Broken(error))
     app = submit(start())
     assert not app.exception and message in app.error[0].value
-    assert not any("# Informe" in m.value for m in app.markdown)
+    assert "Informe de verificación" not in [h.value for h in app.header]
+
+
+def test_privacy_cost_and_consent_are_always_visible() -> None:
+    app = start()
+    assert "se envía a Anthropic" in app.info[0].value and "GDELT" in app.info[0].value
+    assert app.metric[0].label == "Estimación alta del coste" and "USD" in app.metric[0].value
+    assert app.checkbox(key="accepted").value is False
+
+
+def use_pipeline(
+    monkeypatch: pytest.MonkeyPatch, claims: tuple, providers: list[FakeProvider]
+) -> None:
+    """Sustituye el pipeline por uno con las afirmaciones y buscadores dados."""
+    monkeypatch.setattr(orchestrator, "build_pipeline", lambda language, limits: VeritasPipeline(
+        FakeExtractor(claims), FakeVerifier(), FakeFetcher(), providers, limits))
+
+
+def test_question_shows_reformulation_advice(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_pipeline(monkeypatch, (), [FakeProvider("a", ["1"])])
+    app = submit(start(), "¿Cuánto mide el puente?")
+    assert any("es una pregunta" in m.value for m in app.markdown)
+    assert not app.exception
+
+
+def test_source_outage_shows_a_clear_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_pipeline(monkeypatch, CLAIMS, [FakeProvider("gdelt", None)])
+    app = submit(start())
+    assert "limitaron temporalmente" in app.warning[0].value
+    assert "no equivale a que la afirmación sea falsa" in app.warning[0].value
+
+
+def test_claim_limit_is_explained(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_pipeline(monkeypatch, CLAIMS, [FakeProvider("a", ["1"])])
+    app = start()
+    app.slider[0].set_value(1)
+    app = submit(app)
+    assert "a 3 en «Alcance»" in app.warning[0].value
